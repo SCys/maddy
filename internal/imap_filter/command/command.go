@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"os/exec"
 	"regexp"
 
@@ -59,6 +58,11 @@ func (c *Check) IMAPFilter(accountName string, rcptTo string, msgMeta *module.Ms
 	if err != nil {
 		return "", nil, err
 	}
+	defer func() {
+		if err := bR.Close(); err != nil {
+			c.log.Error("failed to close message body buffer", err)
+		}
+	}()
 
 	return c.run(cmd, args, io.MultiReader(bytes.NewReader(buf.Bytes()), bR))
 }
@@ -192,7 +196,7 @@ func (c *Check) run(cmdName string, args []string, stdin io.Reader) (string, []s
 		if _, ok := err.(*exec.ExitError); !ok {
 			// If that's not ExitError, the process may still be running. We do
 			// not want this.
-			if err := cmd.Process.Signal(os.Interrupt); err != nil {
+			if err := cmd.Process.Kill(); err != nil {
 				c.log.Error("failed to kill process", err)
 			}
 		}

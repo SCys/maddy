@@ -458,9 +458,16 @@ func (rd *remoteDelivery) Close() error {
 		conn.takeDest = false
 		conn.transactions++
 
-		if !conn.Usable() {
-			rd.log.Debugf("disconnected %v from %s (errored=%v,transactions=%v,disconnected before=%v)",
-				conn.LocalAddr(), conn.ServerName(), conn.errored, conn.transactions, conn.Client() == nil)
+		// Do not return connections to the pool if MX authentication policies
+		// were not enforced for this delivery (TLS-Required: No override).
+		// Otherwise a later message that expects policy enforcement could
+		// silently reuse a connection that was never validated against
+		// MTA-STS/DANE ("pool poisoning").
+		policyBypassed := rd.rt.allowSecOverride && rd.msgMeta.TLSRequireOverride
+
+		if !conn.Usable() || policyBypassed {
+			rd.log.Debugf("disconnected %v from %s (errored=%v,transactions=%v,policy_bypassed=%v,disconnected before=%v)",
+				conn.LocalAddr(), conn.ServerName(), conn.errored, conn.transactions, policyBypassed, conn.Client() == nil)
 			rd.closeConn(conn)
 		} else {
 			rd.log.Debugf("returning connection %v for %s to pool", conn.LocalAddr(), conn.ServerName())

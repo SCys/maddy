@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"os/exec"
 	"regexp"
 	"runtime/trace"
@@ -210,8 +209,10 @@ func (s *state) expandCommand(address string) (string, []string) {
 	return s.c.cmd, expArgs
 }
 
-func (s *state) run(cmdName string, args []string, stdin io.Reader) module.CheckResult {
-	cmd := exec.Command(cmdName, args...)
+func (s *state) run(ctx context.Context, cmdName string, args []string, stdin io.Reader) module.CheckResult {
+	// Kill the child process if the context is canceled (e.g. connection
+	// closed or timed out) so a hung helper cannot pile up indefinitely.
+	cmd := exec.CommandContext(ctx, cmdName, args...)
 	cmd.Stdin = stdin
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -247,7 +248,7 @@ func (s *state) run(cmdName string, args []string, stdin io.Reader) module.Check
 	bufOut := bufio.NewReader(stdout)
 	hdr, err := textproto.ReadHeader(bufOut)
 	if err != nil && !errors.Is(err, io.EOF) {
-		if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		if err := cmd.Process.Kill(); err != nil {
 			s.log.Error("failed to kill process", err)
 		}
 
@@ -273,7 +274,7 @@ func (s *state) run(cmdName string, args []string, stdin io.Reader) module.Check
 		if _, ok := err.(*exec.ExitError); !ok {
 			// If that's not ExitError, the process may still be running. We do
 			// not want this.
-			if err := cmd.Process.Signal(os.Interrupt); err != nil {
+			if err := cmd.Process.Kill(); err != nil {
 				s.log.Error("failed to kill process", err)
 			}
 		}
@@ -337,7 +338,7 @@ func (s *state) CheckConnection(ctx context.Context) module.CheckResult {
 	defer trace.StartRegion(ctx, "command/CheckConnection-"+s.c.cmd).End()
 
 	cmdName, cmdArgs := s.expandCommand("")
-	return s.run(cmdName, cmdArgs, bytes.NewReader(nil))
+	return s.run(ctx, cmdName, cmdArgs, bytes.NewReader(nil))
 }
 
 func (s *state) CheckSender(ctx context.Context, addr string) module.CheckResult {
@@ -350,7 +351,7 @@ func (s *state) CheckSender(ctx context.Context, addr string) module.CheckResult
 	defer trace.StartRegion(ctx, "command/CheckSender"+s.c.cmd).End()
 
 	cmdName, cmdArgs := s.expandCommand(addr)
-	return s.run(cmdName, cmdArgs, bytes.NewReader(nil))
+	return s.run(ctx, cmdName, cmdArgs, bytes.NewReader(nil))
 }
 
 func (s *state) CheckRcpt(ctx context.Context, addr string) module.CheckResult {
@@ -362,7 +363,7 @@ func (s *state) CheckRcpt(ctx context.Context, addr string) module.CheckResult {
 	defer trace.StartRegion(ctx, "command/CheckRcpt"+s.c.cmd).End()
 
 	cmdName, cmdArgs := s.expandCommand(addr)
-	return s.run(cmdName, cmdArgs, bytes.NewReader(nil))
+	return s.run(ctx, cmdName, cmdArgs, bytes.NewReader(nil))
 }
 
 func (s *state) CheckBody(ctx context.Context, hdr textproto.Header, body buffer.Buffer) module.CheckResult {
@@ -391,8 +392,13 @@ func (s *state) CheckBody(ctx context.Context, hdr textproto.Header, body buffer
 			Reject: true,
 		}
 	}
+	defer func() {
+		if err := bR.Close(); err != nil {
+			s.log.Error("failed to close message body buffer", err)
+		}
+	}()
 
-	return s.run(cmdName, cmdArgs, io.MultiReader(bytes.NewReader(buf.Bytes()), bR))
+	return s.run(ctx, cmdName, cmdArgs, io.MultiReader(bytes.NewReader(buf.Bytes()), bR))
 }
 
 func (s *state) Close() error {

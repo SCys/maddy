@@ -97,6 +97,9 @@ func computeArgon2(opts HashOpts, pass string) (string, error) {
 
 func verifyArgon2(pass, hashSalt string) error {
 	parts := strings.SplitN(hashSalt, ":", 5)
+	if len(parts) != 5 {
+		return fmt.Errorf("pass_table: malformed hash string: expected 5 fields, got %d", len(parts))
+	}
 
 	time, err := strconv.ParseUint(parts[0], 10, 32)
 	if err != nil {

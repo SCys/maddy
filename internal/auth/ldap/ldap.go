@@ -200,12 +200,17 @@ func (a *Auth) returnConn(conn *ldap.Conn) {
 	defer a.connLock.Unlock()
 	if err := a.readBind(conn); err != nil {
 		a.log.Error("failed to rebind for reading", err)
-		if err := a.conn.Close(); err != nil {
+		if err := conn.Close(); err != nil {
 			a.log.Error("Connection close failed", err)
 		}
-		a.conn = nil
+		if a.conn == conn {
+			a.conn = nil
+		}
+		return
 	}
-	if a.conn != conn {
+	if a.conn != nil && a.conn != conn {
+		// Cannot normally happen since the lock is held for the entire
+		// operation, but avoid leaking the replaced connection if it does.
 		if err := a.conn.Close(); err != nil {
 			a.log.Error("Connection close failed", err)
 		}
